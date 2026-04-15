@@ -4,30 +4,9 @@ import plotly.express as px
 import sqlite3
 import json
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor
 
 # --- [ THE ALGORITHM SECTION ] ---
-
-def run_random_forest_algorithm(current_kwh, avg_historical_kwh, context_type):
-    """
-    CLASSIFIER: Evaluates if the current month's behavior was efficient or excessive.
-    """
-    context_mapping = {"Normal Month": 0, "Christmas/New Year": 1, "Holy Week": 1, "Summer Break": 2, "Family Occasion": 3}
-    context_val = context_mapping.get(context_type, 0)
-
-    clf = RandomForestClassifier(n_estimators=100)
-    
-    if current_kwh > (avg_historical_kwh * 1.2) and context_val == 0:
-        prediction = "EXCESSIVE"
-        confidence = 0.92 
-    elif context_val > 0 and current_kwh > (avg_historical_kwh * 1.1):
-        prediction = "NORMAL (Contextual Increase)"
-        confidence = 0.85
-    else:
-        prediction = "EFFICIENT"
-        confidence = 0.95
-        
-    return prediction, confidence
 
 def predict_future_kwh_with_rf(history_df, future_context):
     """
@@ -156,7 +135,7 @@ if not history_df.empty:
     fig.update_traces(textposition="top center")
     st.plotly_chart(fig, use_container_width=True)
     
-    # --- 6. INTELLIGENT BEHAVIORAL ANALYSIS ---
+    # --- 6. STANDARD BEHAVIORAL ANALYSIS (No ML Classification) ---
     latest = history_df.iloc[-1]
     st.divider()
     
@@ -167,21 +146,18 @@ if not history_df.empty:
         st.write(f"In **{latest['Period']}**, the household was in a **{latest['context']}** state.")
         
         st.divider()
-        st.subheader("Insight AI Analysis: Random Forest Classification")
+        st.subheader("Recent Usage Insights")
         
+        # Calculate standard mathematical average for comparison, not AI
         avg_kwh = history_df['actual_kwh'].iloc[:-1].mean() if len(history_df) > 1 else latest['actual_kwh']
-        prediction, confidence = run_random_forest_algorithm(latest['actual_kwh'], avg_kwh, latest['context'])
         
-        st.write(f"**Result:** {prediction}")
-        st.write(f"**Confidence:** {confidence * 100}%")
-        
-        if prediction == "EXCESSIVE":
-            st.warning("The Random Forest algorithm suggests this behavior is inefficient for a normal month.")
+        if latest['actual_kwh'] > (avg_kwh * 1.2) and latest['context'] == "Normal Month":
+            st.warning("⚠️ **Alert:** This behavior is mathematically higher than your historical average for a normal month.")
             
         if "Summer" in latest['context'] or "Christmas" in latest['context']:
-            st.warning("**AI Insight:** High consumption is expected due to the holiday/season. Focus on 'Phantom Loads' (unplugging unused items) while guests are over.")
-        elif "Normal" in latest['context'] and latest['actual_kwh'] > history_df['actual_kwh'].mean():
-            st.error("**AI Insight:** This is a Normal Month but usage is above average. Check for appliance inefficiency!")
+            st.info("💡 **Insight:** High consumption is expected due to the holiday/season. Focus on 'Phantom Loads' (unplugging unused items) while guests are over.")
+        elif "Normal" in latest['context'] and latest['actual_kwh'] > avg_kwh:
+            st.error("💡 **Insight:** This is a Normal Month but usage is above average. Check for appliance inefficiency!")
 
     with col2:
         breakdown = []
@@ -195,7 +171,7 @@ if not history_df.empty:
         else:
             st.write("Set appliance hours in the sidebar to view the breakdown chart.")
 
-    # --- 7. COST PREDICTION & SAVING TIPS (NOW POWERED BY AI REGRESSION) ---
+    # --- 7. COST PREDICTION & SAVING TIPS (POWERED BY ML REGRESSION) ---
     st.divider()
     st.subheader("💰 Next Month's AI Forecast & Tips")
 

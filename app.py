@@ -1,50 +1,19 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import sqlite3
-import json
-import numpy as np
-from sklearn.ensemble import RandomForestRegressor
+import database as db
+import ml_model as ml
 
-# --- [ THE ALGORITHM SECTION ] ---
-
-def predict_future_kwh_with_rf(history_df, future_context):
-    """
-    REGRESSOR: Trains on the user's history to predict the exact numerical kWh for next month.
-    """
-    context_mapping = {"Normal Month": 0, "Christmas/New Year": 1, "Holy Week": 1, "Summer Break": 2, "Family Occasion": 3}
-    
-    # The AI needs at least 3 months of history to find a pattern. 
-    if len(history_df) < 3:
-        return history_df['actual_kwh'].mean()
-        
-    # 1. Prepare the Training Data
-    X_train = history_df['context'].map(context_mapping).fillna(0).values.reshape(-1, 1)
-    y_train = history_df['actual_kwh'].values
-    
-    # 2. Train the Random Forest Regressor
-    regr = RandomForestRegressor(n_estimators=100, random_state=42)
-    regr.fit(X_train, y_train)
-    
-    # 3. Predict the future kWh based on the upcoming event
-    future_val = np.array([[context_mapping.get(future_context, 0)]])
-    ai_predicted_kwh = regr.predict(future_val)[0]
-    
-    return ai_predicted_kwh
-
-# --- 1. DATABASE SETUP (V2) ---
-def init_db():
-    conn = sqlite3.connect('energy_final_v2.db')
-    c = conn.cursor()
-    c.execute('CREATE TABLE IF NOT EXISTS appliance_list (name TEXT PRIMARY KEY, watts REAL, saved_hours REAL DEFAULT 0)')
-    c.execute('CREATE TABLE IF NOT EXISTS energy_history (year INTEGER, month TEXT, actual_kwh REAL, context TEXT)')
-    conn.commit()
-    return conn
-
-conn = init_db()
+# Initialize the database when the app starts
+conn = db.init_db()
 
 st.set_page_config(page_title="Energy Behavioral Analysis", layout="wide")
 st.title("⚡ Smart Energy & Behavioral Tracker")
+
+# Fetch data using our database module
+apps_df = db.fetch_appliances()
+history_df = db.fetch_history()
 
 # --- 2. APPLIANCE MANAGER ---
 with st.expander("Manage Appliances"):
@@ -57,7 +26,6 @@ with st.expander("Manage Appliances"):
             conn.commit()
             st.rerun()
     with col_b:
-        apps_df = pd.read_sql("SELECT * FROM appliance_list", conn)
         st.write("Registered Devices:")
         st.dataframe(apps_df[['name', 'watts']], use_container_width=True)
 
@@ -94,18 +62,14 @@ if st.sidebar.button("Save Appliance Hours"):
     st.rerun()
 
 # --- 4. DATA HISTORY & DELETION ---
-history_df = pd.read_sql("SELECT * FROM energy_history", conn)
-
 with st.expander("View or Delete Monthly Records"):
     if not history_df.empty:
         st.write("Check your history below. If you see an error, select the record to remove it.")
-        
         history_df['display'] = history_df['month'] + " " + history_df['year'].astype(str) + " (" + history_df['actual_kwh'].astype(str) + " kWh)"
         
         col_del1, col_del2 = st.columns([2, 1])
         with col_del1:
             record_to_delete = st.selectbox("Select a record to remove:", history_df['display'])
-        
         with col_del2:
             st.write("---") 
             if st.button("Delete Selected Record"):
@@ -135,7 +99,7 @@ if not history_df.empty:
     fig.update_traces(textposition="top center")
     st.plotly_chart(fig, use_container_width=True)
     
-    # --- 6. STANDARD BEHAVIORAL ANALYSIS (No ML Classification) ---
+    # --- 6. STANDARD BEHAVIORAL ANALYSIS ---
     latest = history_df.iloc[-1]
     st.divider()
     
@@ -144,11 +108,9 @@ if not history_df.empty:
     with col1:
         st.info(f"#### Current Status: {latest['context']}")
         st.write(f"In **{latest['Period']}**, the household was in a **{latest['context']}** state.")
-        
         st.divider()
         st.subheader("Recent Usage Insights")
         
-        # Calculate standard mathematical average for comparison, not AI
         avg_kwh = history_df['actual_kwh'].iloc[:-1].mean() if len(history_df) > 1 else latest['actual_kwh']
         
         if latest['actual_kwh'] > (avg_kwh * 1.2) and latest['context'] == "Normal Month":
@@ -171,42 +133,32 @@ if not history_df.empty:
         else:
             st.write("Set appliance hours in the sidebar to view the breakdown chart.")
 
-    # --- 7. COST PREDICTION & SAVING TIPS (POWERED BY ML REGRESSION) ---
+    # --- 7. COST PREDICTION & SAVING TIPS (CALLING ML MODULE) ---
     st.divider()
     st.subheader("💰 Next Month's AI Forecast & Tips")
 
     col_forecast_1, col_forecast_2 = st.columns(2)
-    
     with col_forecast_1:
         st.info("⚡ Enter the current rate from your provider to get an accurate estimate.")
         current_rate = st.number_input("Current Electricity Rate (₱/kWh)", value=10.0517, step=0.5000, format="%.4f")
-        
     with col_forecast_2:
         st.info("📅 Tell the AI what next month looks like so it can predict your usage.")
         next_month_event = st.selectbox("Expected Context for Next Month:", 
                                         ["Normal Month", "Summer Break", "Christmas/New Year", "Holy Week", "Family Occasion"])
 
-    # RUN THE RANDOM FOREST REGRESSOR
-    predicted_kwh = predict_future_kwh_with_rf(history_df, next_month_event)
+    # ---> THIS IS WHERE WE CALL THE ML FILE! <---
+    predicted_kwh = ml.predict_future_kwh_with_rf(history_df, next_month_event)
     forecasted_cost = predicted_kwh * current_rate
     
     st.write("---")
-    
     c_cost1, c_cost2 = st.columns(2)
 
     with c_cost1:
-        st.metric(
-            label=f"Predicted Bill for a '{next_month_event}'", 
-            value=f"₱{forecasted_cost:,.2f}", 
-            delta=f"AI Baseline Forecast: {predicted_kwh:.2f} kWh", 
-            delta_color="off", 
-            help=f"Random Forest Prediction: {predicted_kwh:.2f} Expected kWh x ₱{current_rate:.4f}"
-        )
+        st.metric(label=f"Predicted Bill for a '{next_month_event}'", value=f"₱{forecasted_cost:,.2f}", 
+                  delta=f"AI Baseline Forecast: {predicted_kwh:.2f} kWh", delta_color="off")
         
-        cost_data = pd.DataFrame({
-            "Category": ["AI Predicted Bill", "Target Bill (10% Save)"],
-            "Amount (₱)": [forecasted_cost, forecasted_cost * 0.9]
-        })
+        cost_data = pd.DataFrame({"Category": ["AI Predicted Bill", "Target Bill (10% Save)"],
+                                  "Amount (₱)": [forecasted_cost, forecasted_cost * 0.9]})
         fig_cost = px.bar(cost_data, x="Category", y="Amount (₱)", color="Category", 
                           color_discrete_sequence=["#f63366", "#00f260"])
         fig_cost.update_layout(showlegend=False)
@@ -214,7 +166,6 @@ if not history_df.empty:
 
     with c_cost2:
         st.success("💡 **Smart Saving Tips for Next Month**")
-        
         if "Summer" in next_month_event:
             st.write("* **Limit AC use:** Set your AC to 25°C. Every degree lower increases cost by 10%.")
             st.write("* **Check Insulation:** Keep curtains closed during the day to block solar heat.")
